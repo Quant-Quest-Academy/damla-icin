@@ -646,7 +646,7 @@ const fog = (() => {
     const vg = g.createRadialGradient(W/2, H/2, Math.min(W, H)*.25, W/2, H/2, Math.max(W, H)*.72);
     vg.addColorStop(0, 'rgba(176,146,166,0)'); vg.addColorStop(1, 'rgba(176,146,166,.34)'); g.fillStyle = vg; g.fillRect(0, 0, W, H);
   }
-  let lineBoxes = [];
+  let lineBoxes = [], dil = null, protect = null, base = -1;
   function buildMask(){
     mask = document.createElement('canvas'); mask.width = W; mask.height = H; const m = mask.getContext('2d');
     const lines = ((W < 600 && CONFIG.fogWordNarrow) ? CONFIG.fogWordNarrow : CONFIG.fogWord).split('|');
@@ -662,13 +662,25 @@ const fog = (() => {
       return { x0: x - tw/2 - fsz*.15, x1: x + tw/2 + fsz*.15, y0: y - fsz*.62, y1: y + fsz*.62 };
     });
     box = { x0: Math.min(...lineBoxes.map(b => b.x0)), x1: Math.max(...lineBoxes.map(b => b.x1)), y0: lineBoxes[0].y0, y1: lineBoxes[lineBoxes.length - 1].y1 };
+    /* a soft halo around the letters: fog the finger cannot wipe, so the words stay readable */
+    dil = document.createElement('canvas'); dil.width = W; dil.height = H; const d = dil.getContext('2d');
+    d.font = font(fsz); d.textAlign = 'center'; d.textBaseline = 'middle'; d.lineJoin = 'round'; d.lineCap = 'round';
+    d.strokeStyle = '#fff'; d.lineWidth = fsz*.5; d.shadowColor = '#fff'; d.shadowBlur = fsz*.3;
+    lines.forEach((l, i) => { const y = y0 + i*lh; d.strokeText(l, x, y); d.strokeText(l, x, y); });
+  }
+  function buildProtect(){
+    protect = document.createElement('canvas'); protect.width = W; protect.height = H; const p = protect.getContext('2d');
+    p.drawImage(tex, 0, 0);
+    p.globalCompositeOperation = 'destination-in'; p.drawImage(dil, 0, 0);
+    p.globalCompositeOperation = 'destination-out'; p.drawImage(mask, 0, 0);
+    p.globalCompositeOperation = 'source-over';
   }
   function reset(){
     ctx.globalCompositeOperation = 'source-over'; ctx.clearRect(0, 0, W, H); ctx.drawImage(tex, 0, 0);
     if (written){ ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0); ctx.globalCompositeOperation = 'source-over'; }
     drips.length = 0;
   }
-  function resize(){ W = innerWidth; H = innerHeight; c.width = W; c.height = H; buildTex(); buildMask(); reset(); }
+  function resize(){ W = innerWidth; H = innerHeight; c.width = W; c.height = H; buildTex(); buildMask(); buildProtect(); reset(); }
   resize(); addEventListener('resize', resize);
   function spawnDrips(){
     const data = mask.getContext('2d').getImageData(0, 0, W, H).data, n = (isTouch ? 4 : 6)*lineBoxes.length;
@@ -681,20 +693,32 @@ const fog = (() => {
     }
   }
   function erase(x, y, r, a){
+    if (!written) return;                      /* the finger only works once the writing is done */
     const g = ctx.createRadialGradient(x, y, 0, x, y, r);
     g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(.6, `rgba(0,0,0,${a*.7})`); g.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.globalCompositeOperation = 'destination-out'; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
     ctx.globalCompositeOperation = 'source-over';
+    /* put the fog back around the letters so the words stay readable */
+    if (protect){
+      const sx = Math.max(0, x - r - 2 | 0), sy = Math.max(0, y - r - 2 | 0), sw = Math.min(W - sx, r*2 + 4 | 0), sh = Math.min(H - sy, r*2 + 4 | 0);
+      if (sw > 0 && sh > 0) ctx.drawImage(protect, sx, sy, sw, sh, sx, sy, sw, sh);
+    }
   }
   function coverage(){
+    /* how much fog is left, measured outside the written lines (those are protected anyway) */
     pctx.clearRect(0, 0, 48, 27); pctx.drawImage(c, 0, 0, 48, 27);
-    const d = pctx.getImageData(0, 0, 48, 27).data; let s = 0;
-    for (let i = 3; i < d.length; i += 4) s += d[i];
-    return s/(d.length/4)/255;
+    const d = pctx.getImageData(0, 0, 48, 27).data; let s = 0, n = 0;
+    for (let y = 0; y < 27; y++) for (let x = 0; x < 48; x++){
+      const py = (y + .5)/27*H;
+      if (lineBoxes.some(lb => py > lb.y0 - 10 && py < lb.y1 + 10)) continue;
+      s += d[(y*48 + x)*4 + 3]; n++;
+    }
+    return n ? s/n/255 : 1;
   }
   return {
     canvas: c, erase, coverage,
     get written(){ return written; },
+    get base(){ return base; },
     write(){ if (written || writing) return; writing = true; writeT = 0; },
     frame(dt, now, visible){
       const ms = Math.min(100, now - (this._last || now)); this._last = now;
@@ -710,7 +734,7 @@ const fog = (() => {
         });
         ctx.clip(); ctx.globalCompositeOperation = 'destination-out'; ctx.drawImage(mask, 0, 0); ctx.restore();
         ctx.globalCompositeOperation = 'source-over';
-        if (writeT >= 1){ writing = false; written = true; spawnDrips(); dripStart = now; }
+        if (writeT >= 1){ writing = false; written = true; spawnDrips(); dripStart = now; base = coverage(); }
       }
       if (drips.length){
         ctx.globalCompositeOperation = 'destination-out'; ctx.lineCap = 'round'; ctx.strokeStyle = 'rgba(0,0,0,.85)';
@@ -721,7 +745,7 @@ const fog = (() => {
         }
         ctx.globalCompositeOperation = 'source-over';
       }
-      ctx.globalAlpha = .0004*dt; ctx.drawImage(tex, 0, 0); ctx.globalAlpha = 1;
+      ctx.globalAlpha = .00025*dt; ctx.drawImage(tex, 0, 0); ctx.globalAlpha = 1;
     }
   };
 })();
@@ -784,14 +808,14 @@ const audio = (() => {
 /* ---------- state machine ---------- */
 const S = CONFIG.scenes;
 let state = 'cloud', stateAt = performance.now(), pT = 0, pS = 0, velS = 0, hold = 0, holdCapShown = false;
-let fogVisT = 0, fogVis = 0, fogBase = -1, complimentShown = false, beadsTapReady = false;
+let fogVisT = 0, fogVis = 0, fogBase = -1, complimentShown = false, beadsTapReady = false, winHintShown = false;
 let flashAt = -99, nextFlash = 0, down = false, lastPt = null, lastRipple = 0;
 const mouse = [.5, .5], dropPos = [0, 0], dropTarget = [0, 0];
 let dropR = 0, seaTouches = 0;
 let timers = [];
 /* the lights to catch while falling */
 const ORBS = 8, orbList = []; for (let i = 0; i < ORBS; i++) orbList.push({ x: 0, y: 0, phase: 0, alive: 0 });
-let caught = 0, gameDone = false, nextSpawn = 0; window.__orbs = orbList;
+let caught = 0, gameDone = false, nextSpawn = 0; window.__orbs = orbList; window.__fog = fog;
 const scoreEl = $('#score');
 function showScore(){ scoreEl.innerHTML = `<b>${caught}</b> / ${S.fall.goal}`; }
 function enter(s){
@@ -799,7 +823,8 @@ function enter(s){
   timers.forEach(clearTimeout); timers = [];
   const sc = S[s];
   if (sc.caps) sc.caps.forEach(c => timers.push(setTimeout(() => showCap(c), c.t)));
-  const h = sc.hint; hint(typeof h === 'object' && h ? (isTouch ? h.touch : h.mouse) : h, s === 'beads' ? 8500 : (s === 'cloud' ? 2500 : 1800));
+  const h = s === 'window' ? null : sc.hint; hint(typeof h === 'object' && h ? (isTouch ? h.touch : h.mouse) : h, s === 'beads' ? 8500 : (s === 'cloud' ? 2500 : 1800));
+  winHintShown = false;
   if (s === 'fall'){ pT = .20; caught = 0; gameDone = false; nextSpawn = performance.now() + 1500; showScore(); timers.push(setTimeout(() => scoreEl.classList.add('show'), 1200)); }
   else { scoreEl.classList.remove('show'); orbList.forEach((o, i) => { o.alive = 0; world.setOrb(i, 0, 0, 0, 0); }); }
   if (s === 'window'){ pT = .47; fogVisT = 1; timers.push(setTimeout(() => fog.write(), 1500)); }
@@ -903,8 +928,8 @@ function loop(now){
   }
   if (state === 'window'){
     if (fog.written){
-      if (fogBase < 0 && inState > 10000){ fogBase = fog.coverage(); }
-      else if (fogBase > 0 && (now | 0) % 6 === 0){ const cov = fog.coverage(); if (cov < fogBase*.84) enter('beads'); }
+      if (!winHintShown){ winHintShown = true; hint(S.window.hint, 600); window.__fogWritten = true; }
+      if (fog.base > 0 && (now | 0) % 6 === 0){ const cov = fog.coverage(); if (cov < fog.base*.85) enter('beads'); }
     }
   }
   if (state === 'sea'){
