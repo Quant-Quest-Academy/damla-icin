@@ -31,11 +31,11 @@ bir ipucu (`hint`) ve notları (`caps`) var. `t`: sahne başladıktan kaç milis
 ## Nasıl ilerliyor (kaydırma yok, o yapıyor)
 
 1. **Bulut.** Ekrana basılı tutunca sis toplanıp damla oluşuyor; damla parmağı takip ediyor. Dolunca düşüyor.
-2. **Düşüş.** Yağmurla şehrin üstüne iniş (~27 sn). Fare/parmak rüzgârı yönlendiriyor, tıklayınca şimşek + gök gürültüsü.
+2. **Düşüş (oyun).** Damlayı parmağınla sürükleyip yükselen pembe ışık damlalarını yakalıyorsun. 7 tanesini toplayınca pencereye varıyor (`goal`). Yakalayamazsa 50 sn sonra kendiliğinden geçer.
 3. **Pencere.** Buğuya "hayatımda gördüğüm en güzel kız" yazılıyor. Camın en az dörtte birini kendisi silince devam ediyor.
 4. **Cam.** Buğu dağılınca ıslak parmakla yazılmış gibi "damla" beliriyor, ışıkları kırıyor. Sonra "cama dokun" → dokununca denize düşüyor.
 5. **Deniz.** Ay, yıldızlar, şehir ışıkları ve yansımaları. Her dokunuş dalga yapıyor ve sabahı biraz daha yaklaştırıyor (yaklaşık 10 dokunuş).
-6. **Sabah.** Güneş doğuyor. "günaydın damla."
+6. **Sabah.** Güneş doğuyor. "çok tatlı birisin damla / senden bi tane daha yok / umarım beğenmişsindir"
 
 Renkler: Damla pembe sevdiği için bütün sahne gül pembesi tonlarında (bulut, şehir ışıkları, buğu, ay, gün doğumu). Vurgu rengi `--amber` değişkeninde.
 

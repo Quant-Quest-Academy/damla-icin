@@ -61,6 +61,10 @@ body{position:fixed;inset:0;width:100%;height:100%;overflow:hidden;background:#0
 #hint i{display:block;width:12px;height:12px;border-radius:50%;border:1.5px solid currentColor;animation:pulse 2.2s ease-out infinite}
 @keyframes pulse{0%{transform:scale(.6);opacity:.9}100%{transform:scale(2.6);opacity:0}}
 #hint.show{opacity:1}
+#score{position:fixed;left:50%;top:calc(4vh + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:3;font-size:clamp(1.8rem,3.4vw,2.6rem);font-weight:600;color:var(--amber);opacity:0;transition:opacity .8s ease;pointer-events:none;white-space:nowrap}
+#score.show{opacity:1}
+#score b{display:inline-block;transition:transform .25s cubic-bezier(.2,.8,.2,1)}
+#score.pop b{transform:scale(1.45)}
 
 .sound{position:fixed;right:calc(1.4rem + env(safe-area-inset-right,0px));bottom:calc(1.1rem + env(safe-area-inset-bottom,0px));z-index:4;font-size:1.1rem;padding:.4rem .6rem;color:var(--ink2);cursor:pointer;opacity:0;transition:opacity 1.2s ease 2.5s,color 2.5s ease}
 body.lit .sound{opacity:1}
@@ -87,6 +91,7 @@ body.lit .sound{opacity:1}
 <div id="touch"></div>
 <div id="caps"></div>
 <div id="hint"><span></span><i></i></div>
+<div id="score"></div>
 <div class="sound" id="sound"></div>
 
 <script>
@@ -106,12 +111,13 @@ const CONFIG = {
       holding: { pos: "tr", html: "her şey bi damlayla başlar" }
     },
     fall: {
-      hint: { touch: "bi dokun", mouse: "bi tıkla" },
+      hint: "damlayı sürükle ışıkları yakala",
       caps: [
-        { t: 2500, pos: "ml", html: "milyonlarca damla var<br>hiçbiri aynı değil" },
-        { t: 11000, pos: "br", html: "aşağıda şehir var" }
+        { t: 3000, pos: "ml", html: "milyonlarca damla var<br>hiçbiri aynı değil", dur: 6000 }
       ],
-      duration: 18000
+      goal: 7,                 /* kaç ışık yakalayınca pencereye varsın */
+      done: { pos: "ml", html: "hepsini yakaladın", dur: 3000 },
+      duration: 50000          /* yakalayamazsa bile en geç bu sürede geçer */
     },
     window: {
       hint: "camı sil",
@@ -131,9 +137,8 @@ const CONFIG = {
     },
     end: {
       caps: [
-        { t: 400, pos: "c", big: true, html: "günaydın damla", dur: 7000 },
-        { t: 8200, pos: "c", mid: true, html: "çok tatlı birisin damla", stay: true },
-        { t: 11500, pos: "bc", html: "senden&nbsp;bi&nbsp;tane&nbsp;daha&nbsp;yok<br>umarım&nbsp;beğenmişsindir<br><a>baştan</a>", stay: true }
+        { t: 1500, pos: "c", mid: true, html: "çok tatlı birisin damla", stay: true },
+        { t: 5000, pos: "bc", html: "senden&nbsp;bi&nbsp;tane&nbsp;daha&nbsp;yok<br>umarım&nbsp;beğenmişsindir<br><a>baştan</a>", stay: true }
       ]
     }
   }
@@ -199,7 +204,7 @@ function dropPath(g, s){ g.beginPath(); g.moveTo(0, -s); g.bezierCurveTo(s*.1, -
 const world = (() => {
   const c = $('#glass');
   const gl = c.getContext('webgl', { antialias:false, alpha:false, powerPreference:'high-performance' });
-  const dead = { frame(){}, set(){}, ripple(){}, setShape(){}, screenToSea(){ return null; }, time(){ return 0; } };
+  const dead = { frame(){}, set(){}, ripple(){}, setShape(){}, screenToSea(){ return null; }, time(){ return 0; }, setOrb(){}, burst(){}, degrade(){ return false; } };
   if (!gl){ c.style.background = 'radial-gradient(ellipse at 50% 110%, #2a1a0c, #06080e 60%)'; return dead; }
   const vs = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
   const fs = `
@@ -207,7 +212,7 @@ precision highp float;
 uniform vec2 u_res; uniform float u_time; uniform float u_p; uniform float u_hold; uniform vec2 u_mouse; uniform vec2 u_drop; uniform float u_dropR;
 uniform float u_flash; uniform float u_shape; uniform float u_morph; uniform float u_vel;
 uniform sampler2D u_maskA; uniform sampler2D u_maskB;
-uniform vec4 u_rip[10];
+uniform vec4 u_rip[10]; uniform vec4 u_orbs[8]; uniform vec4 u_bursts[6];
 
 float sat(float x){ return clamp(x, 0., 1.); }
 float h11(float p){ p = fract(p*.1031); p *= p + 33.33; p *= p + p; return fract(p); }
@@ -357,8 +362,8 @@ vec3 sceneWindow(vec2 frag, float aspect, float t){
   col += vec3(1.,.92,.96)*(m*.04 + spec*.32); col *= 1. - shade*.3;
   /* the water letters: a soft pink sheen inside, a bright rim where the film ends */
   float rim = length(w.xy);
-  col += vec3(1.,.8,.9)*rim*.5 + vec3(.95,.7,.82)*w.z*.14;
-  col += vec3(1.,.93,.96)*pow(max(0., dot(normalize(w.xy + 1e-5), vec2(-.5,.85))), 2.)*rim*.7;
+  col += vec3(1.,.8,.9)*rim*.28 + vec3(.95,.7,.82)*w.z*.14;
+  col += vec3(1.,.93,.96)*pow(max(0., dot(normalize(w.xy + 1e-5), vec2(-.5,.85))), 2.)*rim*.4;
   float vig = smoothstep(1.6, .4, length(frag - .5)*1.3);
   return col*(.75 + .25*vig);
 }
@@ -456,26 +461,78 @@ void main(){
       sf = mix(sf, inner, m) + vec3(1.,.95,.97)*spec*m*.85 + vec3(.95,.7,.85)*smoothstep(r*.6, r, len)*m*.14;
     }
     sf += vec3(.95,.65,.8)*smoothstep(r*2., r, len)*(1. - m)*.18;
+    /* the little lights to catch, and the sparkle when one is caught */
+    for(int i=0;i<8;i++){
+      vec4 ob = u_orbs[i];
+      if (ob.w > 0.){
+        vec2 od = uv - ob.xy; float ol = teardrop(od, .02);
+        float core = smoothstep(.02, .014, ol);
+        float glow = exp(-length(od)*26.)*(.75 + .25*sin(t*5. + ob.z));
+        sf += vec3(1.,.5,.75)*glow*1.1 + vec3(1.,.92,.96)*core*ob.w;
+      }
+    }
+    for(int i=0;i<6;i++){
+      vec4 bu = u_bursts[i]; float age = t - bu.z;
+      if (bu.w > 0. && age > 0. && age < 1.1){
+        float bl = length(uv - bu.xy); float rr = age*.32;
+        float ring = exp(-abs(bl - rr)*80.)*(1. - age/1.1);
+        float sparks = 0.;
+        for(int k=0;k<6;k++){ float ang = float(k)*1.047 + bu.z*3.; vec2 sp = bu.xy + vec2(cos(ang), sin(ang))*age*.28; sparks += exp(-length(uv - sp)*120.); }
+        sf += vec3(1.,.7,.85)*ring*1.6 + vec3(1.,.85,.92)*sparks*(1. - age)*1.2;
+      }
+    }
     col += sf*wFall;
   }
   if (wWin > 0.)   col += sceneWindow(frag, aspect, t)*wWin;
   if (wSea > 0.)   col += sceneSea(uv, t, p, dawn, u_mouse)*wSea;
   col += vec3(.9,.65,.8)*u_flash*wCloud*.5;
-  float vig = smoothstep(1.5, .5, length(frag - .5)*1.3);
-  col *= mix(.8 + .2*vig, 1., dawn);
-  col += (h21(gl_FragCoord.xy + fract(t)*100.) - .5)*.022;
   gl_FragColor = vec4(col, 1.);
+}`;
+  /* second pass: bloom (a soft halo on everything bright), vignette, film grain */
+  const fsPost = `
+precision mediump float;
+uniform sampler2D u_tex; uniform vec2 u_res; uniform float u_time; uniform float u_p;
+void main(){
+  vec2 uv = gl_FragCoord.xy/u_res; vec2 asp = vec2(u_res.y/u_res.x, 1.);
+  vec3 c = texture2D(u_tex, uv).rgb;
+  vec3 b = vec3(0.);
+  for(int i=0;i<12;i++){ float a = float(i)*.5236; vec3 s = texture2D(u_tex, uv + vec2(cos(a), sin(a))*asp*.014).rgb; b += max(s - .5, 0.); }
+  for(int i=0;i<8;i++){ float a = float(i)*.7854 + .35; vec3 s = texture2D(u_tex, uv + vec2(cos(a), sin(a))*asp*.034).rgb; b += max(s - .5, 0.)*.7; }
+  float dawn = smoothstep(.84, .98, u_p);
+  c += b/17.6*1.3*(1. - dawn*.8);
+  float vig = smoothstep(1.5, .5, length(uv - .5)*1.3);
+  c *= mix(.8 + .2*vig, .92 + .08*vig, dawn);
+  c += (fract(sin(dot(gl_FragCoord.xy + fract(u_time)*100., vec2(12.9898, 78.233)))*43758.5453) - .5)*.02;
+  gl_FragColor = vec4(c, 1.);
 }`;
   function sh(type, src){ const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
     if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) console.error(gl.getShaderInfoLog(s)); return s; }
-  const prog = gl.createProgram();
-  gl.attachShader(prog, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(prog);
-  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(prog)); return dead; }
-  gl.useProgram(prog);
+  function link(fsrc){
+    const pr = gl.createProgram(); gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fsrc));
+    gl.bindAttribLocation(pr, 0, 'p'); gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(pr)); return null; }
+    return pr;
+  }
+  const prog = link(fs), post = link(fsPost);
+  if (!prog || !post) return dead;
   const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), gl.STATIC_DRAW);
-  const loc = gl.getAttribLocation(prog, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-  const U = {}; ['u_res','u_time','u_p','u_hold','u_mouse','u_drop','u_dropR','u_flash','u_shape','u_morph','u_maskA','u_maskB','u_rip','u_vel'].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.useProgram(prog);
+  const U = {}; ['u_res','u_time','u_p','u_hold','u_mouse','u_drop','u_dropR','u_flash','u_shape','u_morph','u_maskA','u_maskB','u_rip','u_vel','u_orbs','u_bursts'].forEach(n => U[n] = gl.getUniformLocation(prog, n));
+  const P = {}; ['u_tex','u_res','u_time','u_p'].forEach(n => P[n] = gl.getUniformLocation(post, n));
+  /* offscreen target for the scene */
+  const fbo = gl.createFramebuffer(), sceneTex = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  function sizeTarget(){
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, c.width, c.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
 
   const tex = [gl.createTexture(), gl.createTexture()];
   const mc = [document.createElement('canvas'), document.createElement('canvas')];
@@ -506,12 +563,13 @@ void main(){
   }
   let SCALE = isTouch ? Math.min(1.1, (window.devicePixelRatio || 1)*.4) : .75;
   const MIN_SCALE = isTouch ? .55 : .45;
-  function resize(){ c.width = Math.max(2, innerWidth*SCALE | 0); c.height = Math.max(2, innerHeight*SCALE | 0); gl.viewport(0, 0, c.width, c.height); sizeMasks(); }
+  function resize(){ c.width = Math.max(2, innerWidth*SCALE | 0); c.height = Math.max(2, innerHeight*SCALE | 0); gl.viewport(0, 0, c.width, c.height); sizeMasks(); sizeTarget(); }
   resize(); addEventListener('resize', resize);
   if (window.visualViewport) visualViewport.addEventListener('resize', resize);
   if (document.fonts && document.fonts.load) document.fonts.load('700 100px Caveat').then(sizeMasks).catch(() => {});
 
   const rip = new Float32Array(40); let ri = 0;
+  const orbs = new Float32Array(32), bursts = new Float32Array(24); let bi = 0;
   const st = { p: 0, hold: 0, mouse: [.5,.5], drop: [0, 0], dropR: 0, flash: 0, vel: 0 };
   const t0 = performance.now();
   const now = () => (performance.now() - t0)/1000;
@@ -520,14 +578,24 @@ void main(){
       const sec = now();
       shapeV += (shapeT - shapeV)*(shapeT > shapeV ? .011 : .03)*dt;   /* written slowly, left to right */
       const morph = 0.;
+      /* pass 1: the world, into a texture */
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo); gl.useProgram(prog);
+      gl.uniform1i(U.u_maskA, 0); gl.uniform1i(U.u_maskB, 1);
       gl.uniform2f(U.u_res, c.width, c.height);
       gl.uniform1f(U.u_time, sec); gl.uniform1f(U.u_p, st.p); gl.uniform1f(U.u_hold, st.hold);
       gl.uniform2f(U.u_mouse, st.mouse[0], st.mouse[1]); gl.uniform2f(U.u_drop, st.drop[0], st.drop[1]); gl.uniform1f(U.u_dropR, st.dropR);
       gl.uniform1f(U.u_flash, st.flash);
       gl.uniform1f(U.u_shape, shapeV); gl.uniform1f(U.u_morph, morph); gl.uniform1f(U.u_vel, st.vel);
-      gl.uniform4fv(U.u_rip, rip);
+      gl.uniform4fv(U.u_rip, rip); gl.uniform4fv(U.u_orbs, orbs); gl.uniform4fv(U.u_bursts, bursts);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      /* pass 2: bloom + grain, onto the screen */
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.useProgram(post);
+      gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+      gl.uniform1i(P.u_tex, 2); gl.uniform2f(P.u_res, c.width, c.height); gl.uniform1f(P.u_time, sec); gl.uniform1f(P.u_p, st.p);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
+    setOrb(i, x, y, phase, alive){ orbs[i*4] = x; orbs[i*4+1] = y; orbs[i*4+2] = phase; orbs[i*4+3] = alive; },
+    burst(x, y){ bursts[bi*4] = x; bursts[bi*4+1] = y; bursts[bi*4+2] = now(); bursts[bi*4+3] = 1; bi = (bi + 1) % 6; },
     set(k, v){ st[k] = v; },
     setShape(on){ shapeT = on ? 1 : 0; },
     /* the phone is struggling: render smaller */
@@ -688,6 +756,7 @@ const audio = (() => {
     start(){ if (started){ if (ctx && ctx.state === 'suspended') ctx.resume(); return; } started = build(); if (started) setOn(true); },
     thunder,
     drop(){ if (ctx && on) plink(ctx.currentTime, 500 + Math.random()*300, .05); },
+    catchOrb(n){ if (!ctx || !on) return; const base = [523, 587, 659, 784, 880, 1047, 1175][n % 7]; plink(ctx.currentTime, base, .06); plink(ctx.currentTime + .07, base*1.5, .035); },
     frame(now, p, state){
       if (!ctx || !on) return;
       if (now > nextPlink && p < .84 && state !== 'cloud'){ plink(ctx.currentTime, 1400 + Math.random()*2600, .01 + Math.random()*.012); nextPlink = now + 120 + Math.random()*900; }
@@ -706,13 +775,19 @@ let flashAt = -99, nextFlash = 0, down = false, lastPt = null, lastRipple = 0;
 const mouse = [.5, .5], dropPos = [0, 0], dropTarget = [0, 0];
 let dropR = 0, seaTouches = 0;
 let timers = [];
+/* the lights to catch while falling */
+const ORBS = 8, orbList = []; for (let i = 0; i < ORBS; i++) orbList.push({ x: 0, y: 0, phase: 0, alive: 0 });
+let caught = 0, gameDone = false, nextSpawn = 0; window.__orbs = orbList;
+const scoreEl = $('#score');
+function showScore(){ scoreEl.innerHTML = `<b>${caught}</b> / ${S.fall.goal}`; }
 function enter(s){
   state = s; stateAt = performance.now(); hideAll(); window.__state = s;
   timers.forEach(clearTimeout); timers = [];
   const sc = S[s];
   if (sc.caps) sc.caps.forEach(c => timers.push(setTimeout(() => showCap(c), c.t)));
   const h = sc.hint; hint(typeof h === 'object' && h ? (isTouch ? h.touch : h.mouse) : h, s === 'beads' ? 8500 : (s === 'cloud' ? 2500 : 1800));
-  if (s === 'fall'){ pT = .20; }
+  if (s === 'fall'){ pT = .20; caught = 0; gameDone = false; nextSpawn = performance.now() + 1500; showScore(); timers.push(setTimeout(() => scoreEl.classList.add('show'), 1200)); }
+  else { scoreEl.classList.remove('show'); orbList.forEach((o, i) => { o.alive = 0; world.setOrb(i, 0, 0, 0, 0); }); }
   if (s === 'window'){ pT = .47; fogVisT = 1; timers.push(setTimeout(() => fog.write(), 1500)); }
   if (s === 'beads'){ pT = .58; fogVisT = 0; world.setShape(true); timers.push(setTimeout(() => { beadsTapReady = true; }, 8000)); }
   if (s === 'sea'){ pT = .70; world.setShape(false); audio.drop(); }
@@ -725,7 +800,7 @@ const touch = $('#touch');
 function toUV(cx, cy){ const a = innerWidth/innerHeight; return [(cx/innerWidth - .5)*a, .5 - cy/innerHeight]; }
 function setMouse(cx, cy){ mouse[0] = cx/innerWidth; mouse[1] = 1 - cy/innerHeight; const u = toUV(cx, cy); dropTarget[0] = u[0]; dropTarget[1] = u[1]; }
 function tap(cx, cy){
-  if (state === 'fall'){ const sec = world.time(); if (sec - flashAt > .8){ flashAt = sec; audio.thunder(); } }
+  if (state === 'fall'){ /* steering only; the drop follows the finger */ }
   else if (state === 'window'){ fog.erase(cx, cy, isTouch ? 54 : 46, .95); }
   else if (state === 'beads'){ if (beadsTapReady) enter('sea'); }
   else if (state === 'sea'){
@@ -785,10 +860,32 @@ function loop(now){
     if (hold >= 1){ timers.push(setTimeout(() => enter('fall'), 900)); hold = 1.001; }
   }
   if (state === 'fall'){
-    const k = sat(inState/S.fall.duration);
+    const k = gameDone ? 1 : Math.min(.85, Math.max(inState/S.fall.duration, caught/S.fall.goal));
     pT = .20 + .18*k;
     dropR += (.062 - dropR)*.02*dt;
-    if (k >= 1) enter('window');
+    /* the game: lights rise from below, the drop must touch them */
+    const aspect = innerWidth/innerHeight, secDt = rawDt*16.667/1000;
+    if (!gameDone){
+      const alive = orbList.filter(o => o.alive > 0).length;
+      if (now > nextSpawn && alive < 3){
+        const o = orbList.find(o => o.alive === 0);
+        if (o){ o.x = (Math.random() - .5)*aspect*.8; o.y = -.62; o.phase = Math.random()*6.28; o.alive = 1; }
+        nextSpawn = now + 900 + Math.random()*900;
+      }
+      orbList.forEach((o, i) => {
+        if (o.alive > 0){
+          o.y += (.14 + .02*Math.sin(o.phase))*Math.min(secDt, .1); o.x += Math.sin(sec*1.4 + o.phase)*.0012*dt;
+          if (o.y > .62) o.alive = 0;
+          else if (Math.hypot(o.x - dropPos[0], o.y - dropPos[1]) < .085){
+            o.alive = 0; caught++; world.burst(o.x, o.y); audio.catchOrb(caught); showScore();
+            scoreEl.classList.add('pop'); setTimeout(() => scoreEl.classList.remove('pop'), 260);
+            if (caught >= S.fall.goal){ gameDone = true; showCap(S.fall.done); hint(null); timers.push(setTimeout(() => enter('window'), 2600)); }
+          }
+        }
+        world.setOrb(i, o.x, o.y, o.phase, o.alive);
+      });
+      if (inState > S.fall.duration){ gameDone = true; timers.push(setTimeout(() => enter('window'), 1500)); }
+    }
   }
   if (state === 'window'){
     if (fog.written){
