@@ -138,7 +138,7 @@ const CONFIG = {
     end: {
       caps: [
         { t: 1500, pos: "c", mid: true, html: "çok tatlı birisin damla", stay: true },
-        { t: 5000, pos: "bc", html: "senden&nbsp;bi&nbsp;tane&nbsp;daha&nbsp;yok<br>umarım&nbsp;beğenmişsindir<br><a>baştan</a>", stay: true }
+        { t: 5000, pos: "bc", html: "senden&nbsp;bi&nbsp;tane&nbsp;daha&nbsp;yok<br>aynı&nbsp;damlalar&nbsp;gibi<br>umarım&nbsp;beğenmişsindir<br><a>baştan</a>", stay: true }
       ]
     }
   }
@@ -336,34 +336,45 @@ vec3 beads(vec2 uv, float t, float cols, float seed, float dens){
   vec2 d = uv - c; float m = smoothstep(r, r*.7, length(d))*on;
   return vec3(-d/r*m, m);
 }
-/* her name, written on the wet glass with a finger: a smooth film of water that bends the lights */
-vec3 waterText(vec2 frag){
-  float reveal = smoothstep(u_shape*1.2 + .03, u_shape*1.2 - .05, frag.x);
-  float m = texture2D(u_maskA, frag).a*reveal;
-  float e = 1.2/512.;
+/* her name, written on the wet glass with a finger: a raised film of water with a rounded profile */
+vec4 waterText(vec2 frag){
+  float reveal = smoothstep(u_shape*1.2 + .04, u_shape*1.2 - .08, frag.x);
+  float m = texture2D(u_maskA, frag).a;
+  float e = 1.5/1024.;
   float gx = texture2D(u_maskA, frag + vec2(e,0.)).a - texture2D(u_maskA, frag - vec2(e,0.)).a;
   float gy = texture2D(u_maskA, frag + vec2(0.,e)).a - texture2D(u_maskA, frag - vec2(0.,e)).a;
-  return vec3(vec2(gx, gy)*reveal, m);
+  /* dome height: flat in the middle, curving down at the edges */
+  float h = smoothstep(0., 1., m);
+  vec3 n = normalize(vec3(-vec2(gx, gy)*16.*(1. - h*.6), 1.));
+  return vec4(n.xy*reveal, h*reveal, n.z);
 }
 vec3 sceneWindow(vec2 frag, float aspect, float t){
   vec2 uv = vec2(frag.x*aspect, frag.y);
   vec3 a = slide(uv, t, 1., 9., .58); vec3 b = slide(uv, t, 5., 19., .7);
-  vec3 c = beads(uv, t, 30., 2.2, .68); vec3 w = waterText(frag);
-  vec2 off = a.xy + b.xy*.6 + c.xy*.4 - w.xy*5.;
-  float m = max(max(a.z, b.z), max(c.z, smoothstep(.0, .5, w.z)));
-  float blur = mix(.075, .008, m);
+  vec3 c = beads(uv, t, 30., 2.2, .68); vec4 w = waterText(frag);
+  float wm = w.z;
+  vec2 off = a.xy + b.xy*.6 + c.xy*.4 + w.xy*1.1*smoothstep(.0, .35, wm);
+  float m = max(max(a.z, b.z), c.z);
+  float blur = mix(mix(.075, .008, m), .004, smoothstep(.08, .5, wm));
   vec2 suv = uv + off*.05 + (u_mouse - .5)*.03;
   vec3 sky = mix(vec3(.02,.012,.04), vec3(.06,.04,.07), suv.y) + vec3(.28,.1,.18)*exp(-suv.y*2.6)*.8;
   vec3 L = lights(suv, blur, t); L = 1. - exp(-L*1.3);
   vec3 col = sky + L;
-  vec2 n = off*.9;
-  float spec = pow(max(0., dot(n, vec2(.6,-.8))), 3.)*m;
-  float shade = pow(max(0., dot(n, vec2(-.6,.8))), 2.)*m;
+  vec2 nn = off*.9;
+  float spec = pow(max(0., dot(nn, vec2(.6,-.8))), 3.)*m;
+  float shade = pow(max(0., dot(nn, vec2(-.6,.8))), 2.)*m;
   col += vec3(1.,.92,.96)*(m*.04 + spec*.32); col *= 1. - shade*.3;
-  /* the water letters: a soft pink sheen inside, a bright rim where the film ends */
-  float rim = length(w.xy);
-  col += vec3(1.,.8,.9)*rim*.28 + vec3(.95,.7,.82)*w.z*.14;
-  col += vec3(1.,.93,.96)*pow(max(0., dot(normalize(w.xy + 1e-5), vec2(-.5,.85))), 2.)*rim*.4;
+  /* the water letters: lit like glass. a broad soft highlight from the upper left, a thin bright edge, a shadow below */
+  vec3 N = normalize(vec3(w.xy, max(w.w, .2)));
+  float inside = smoothstep(.03, .3, wm);
+  float hi = pow(max(0., dot(N, normalize(vec3(-.45, .75, .55)))), 28.)*inside;
+  float edge = pow(1. - N.z, 1.6)*smoothstep(.02, .18, wm)*(1. - smoothstep(.5, .9, wm));
+  float sh = pow(max(0., dot(N, normalize(vec3(.4, -.75, .3)))), 2.)*inside;
+  col += vec3(1.,.95,.97)*hi*.85;
+  col += vec3(1.,.82,.92)*edge*.55;
+  col *= 1. - sh*.18;
+  /* the film itself catches the room light: a translucent rose glow, and the city lights sharpen inside it */
+  col += vec3(1.,.8,.9)*wm*.2*(.75 + .25*smoothstep(.0, 1., frag.y)) + L*wm*.7;
   float vig = smoothstep(1.6, .4, length(frag - .5)*1.3);
   return col*(.75 + .25*vig);
 }
@@ -549,9 +560,12 @@ void main(){
       let fsz = Math.min(w*.36, h*.6); const font = f => `600 ${f}px Caveat, "Segoe Script", cursive`;
       g.font = font(fsz);
       while (g.measureText(name).width > w*.8 && fsz > 8){ fsz *= .94; g.font = font(fsz); }
-      g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = fsz*.035;
-      g.shadowColor = '#fff'; g.shadowBlur = Math.max(2, w/300);
+      g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineWidth = fsz*.05;
+      /* a soft, rounded profile: blurred passes underneath, a crisp core on top */
+      g.shadowColor = '#fff'; g.shadowBlur = Math.max(4, w/45);
       g.strokeText(name, w/2, h/2); g.fillText(name, w/2, h/2);
+      g.shadowBlur = Math.max(2, w/110); g.fillText(name, w/2, h/2);
+      g.shadowBlur = 0; g.globalAlpha = .9; g.fillText(name, w/2, h/2); g.globalAlpha = 1;
     }
     upload(i);
   }
@@ -869,14 +883,14 @@ function loop(now){
       const alive = orbList.filter(o => o.alive > 0).length;
       if (now > nextSpawn && alive < 3){
         const o = orbList.find(o => o.alive === 0);
-        if (o){ o.x = (Math.random() - .5)*aspect*.8; o.y = -.62; o.phase = Math.random()*6.28; o.alive = 1; }
-        nextSpawn = now + 900 + Math.random()*900;
+        if (o){ o.x = (Math.random() - .5)*aspect*.7; o.y = -.62; o.phase = Math.random()*6.28; o.alive = 1; }
+        nextSpawn = now + 1100 + Math.random()*800;
       }
       orbList.forEach((o, i) => {
         if (o.alive > 0){
-          o.y += (.14 + .02*Math.sin(o.phase))*Math.min(secDt, .1); o.x += Math.sin(sec*1.4 + o.phase)*.0012*dt;
+          o.y += (.095 + .015*Math.sin(o.phase))*Math.min(secDt, .1); o.x += Math.sin(sec*1.2 + o.phase)*.0008*dt;
           if (o.y > .62) o.alive = 0;
-          else if (Math.hypot(o.x - dropPos[0], o.y - dropPos[1]) < .085){
+          else if (Math.hypot(o.x - dropPos[0], o.y - dropPos[1]) < .12){
             o.alive = 0; caught++; world.burst(o.x, o.y); audio.catchOrb(caught); showScore();
             scoreEl.classList.add('pop'); setTimeout(() => scoreEl.classList.remove('pop'), 260);
             if (caught >= S.fall.goal){ gameDone = true; showCap(S.fall.done); hint(null); timers.push(setTimeout(() => enter('window'), 2600)); }
@@ -904,8 +918,10 @@ function loop(now){
   pS += (pT - pS)*Math.min(1, .025*dt);
   velS += ((Math.abs(pS - prevP)/Math.max(dt, .1))*90 - velS)*.12*dt;
   const follow = state === 'cloud' || state === 'fall';
-  const tx = follow ? dropTarget[0]*.85 : 0, ty = follow ? dropTarget[1]*.85 : 0;
-  dropPos[0] += (tx - dropPos[0])*.035*dt; dropPos[1] += (ty - dropPos[1])*.035*dt;
+  const lift = (state === 'fall' && isTouch) ? .13 : 0;     /* on a phone the drop rides just above the finger so it stays visible */
+  const tx = follow ? dropTarget[0]*.9 : 0, ty = follow ? Math.min(.45, dropTarget[1]*.9 + lift) : 0;
+  const k = state === 'fall' ? .12 : .035;
+  dropPos[0] += (tx - dropPos[0])*k*dt; dropPos[1] += (ty - dropPos[1])*k*dt;
   if (state === 'fall') dropPos[1] += Math.sin(sec*2.2)*.0006*dt;
   world.set('p', pS); world.set('vel', Math.min(2.5, velS)); world.set('hold', Math.min(1, hold));
   world.set('mouse', mouse.slice()); world.set('drop', dropPos.slice()); world.set('dropR', dropR);
